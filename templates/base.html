@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}ZFS iSCSI Manager{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.2/dist/full.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            daisyui: {
+                themes: ["light", "dark"],
+            },
+        }
+    </script>
+    <style>
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+        .service-status {
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+        .status-running {
+            background-color: #10b981;
+            color: white;
+        }
+        .status-stopped {
+            background-color: #ef4444;
+            color: white;
+        }
+        .sidebar-item {
+            transition: all 0.3s ease;
+            border-radius: 8px;
+        }
+        .sidebar-item:hover {
+            background-color: rgba(59, 130, 246, 0.1);
+            transform: translateX(4px);
+        }
+        .sidebar-item.active {
+            background-color: #3b82f6;
+            color: white;
+        }
+        .material-card {
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+            border: 1px solid #e5e7eb;
+        }
+        .material-card:hover {
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        .floating-action-btn {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            z-index: 1000;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+        }
+        .snackbar {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            z-index: 1000;
+            transition: transform 0.3s ease;
+        }
+        .snackbar.show {
+            transform: translateX(-50%) translateY(0);
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-base-100">
+    <!-- Sidebar -->
+    <div class="drawer lg:drawer-open">
+        <input id="sidebar-drawer" type="checkbox" class="drawer-toggle" />
+        <div class="drawer-content flex flex-col">
+            <!-- Navigation -->
+            <div class="navbar bg-base-200 shadow-lg sticky top-0 z-50">
+                <div class="navbar-start">
+                    <label for="sidebar-drawer" class="btn btn-ghost drawer-button lg:hidden">
+                        <i class="fas fa-bars"></i>
+                    </label>
+                    <a class="btn btn-ghost normal-case text-xl">
+                        <i class="fas fa-server mr-2"></i>
+                        ZFS iSCSI Manager
+                    </a>
+                </div>
+                <div class="navbar-end">
+                    <label class="swap swap-rotate">
+                        <input type="checkbox" class="theme-controller" value="dark" />
+                        <svg class="swap-off fill-current w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5.64,17l-.71.71a1,1,0,0,0,0,1.41,1,1,0,0,0,1.41,0l.71-.71A1,1,0,0,0,5.64,17ZM5,12a1,1,0,0,0-1-1H3a1,1,0,0,0,0,2H4A1,1,0,0,0,5,12Zm7-7a1,1,0,0,0,1-1V3a1,1,0,0,0-2,0V4A1,1,0,0,0,12,5ZM5.64,7.05a1,1,0,0,0,.7.29,1,1,0,0,0,.71-.29,1,1,0,0,0,0-1.41l-.71-.71A1,1,0,0,0,4.93,6.34Zm12,.29a1,1,0,0,0,.7-.29l.71-.71a1,1,0,1,0-1.41-1.41L17,5.64a1,1,0,0,0,0,1.41A1,1,0,0,0,17.66,7.34ZM21,11H20a1,1,0,0,0,0,2h1a1,1,0,0,0,0-2Zm-9,8a1,1,0,0,0-1,1v1a1,1,0,0,0,2,0V20A1,1,0,0,0,12,19ZM18.36,17A1,1,0,0,0,17,18.36l.71.71a1,1,0,0,0,1.41,0,1,1,0,0,0,0-1.41ZM12,6.5A5.5,5.5,0,1,0,17.5,12,5.51,5.51,0,0,0,12,6.5Zm0,9A3.5,3.5,0,1,1,15.5,12,3.5,3.5,0,0,1,12,15.5Z"/></svg>
+                        <svg class="swap-on fill-current w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21.64,13a1,1,0,0,0-1.05-.14,8.05,8.05,0,0,1-3.37.73A8.15,8.15,0,0,1,9.08,5.49a8.59,8.59,0,0,1,.25-2A1,1,0,0,0,8,2.36,10.14,10.14,0,1,0,22,14.05,1,1,0,0,0,21.64,13Zm-9.5,6.69A8.14,8.14,0,0,1,7.08,5.22v.27A10.15,10.15,0,0,0,17.22,15.63a9.79,9.79,0,0,0,2.1-.22A8.11,8.11,0,0,1,12.14,19.73Z"/></svg>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <main class="container mx-auto p-6 flex-1">
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+        
+        <div class="drawer-side">
+            <label for="sidebar-drawer" class="drawer-overlay"></label>
+            <div class="menu p-4 w-80 min-h-full bg-base-200 text-base-content">
+                <!-- Sidebar header -->
+                <div class="p-4 mb-6 border-b border-base-300">
+                    <h2 class="text-xl font-bold text-center">
+                        <i class="fas fa-server mr-2"></i>
+                        Storage Manager
+                    </h2>
+                </div>
+                
+                <!-- Navigation Links -->
+                <ul class="space-y-2">
+                    <li>
+                        <a href="{{ url_for('dashboard') }}" class="sidebar-item {{ 'active' if request.endpoint == 'dashboard' }}">
+                            <i class="fas fa-tachometer-alt mr-3"></i>
+                            Dashboard
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('targets') }}" class="sidebar-item {{ 'active' if request.endpoint == 'targets' }}">
+                            <i class="fas fa-target mr-3"></i>
+                            iSCSI Targets
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('zfs_management') }}" class="sidebar-item {{ 'active' if request.endpoint == 'zfs_management' }}">
+                            <i class="fas fa-database mr-3"></i>
+                            ZFS Storage
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('snapshots') }}" class="sidebar-item {{ 'active' if request.endpoint == 'snapshots' }}">
+                            <i class="fas fa-camera mr-3"></i>
+                            Snapshots
+                        </a>
+                    </li>
+                </ul>
+
+                <!-- System Status Section -->
+                <div class="mt-8 p-4 bg-base-300 rounded-lg">
+                    <h3 class="font-semibold mb-3">System Status</h3>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between items-center">
+                            <span>iSCSI Service:</span>
+                            <span class="badge badge-success badge-sm">Running</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span>ZFS Status:</span>
+                            <span class="badge badge-success badge-sm">Online</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Snackbar for notifications -->
+    <div id="snackbar" class="snackbar">
+        <div class="alert shadow-lg max-w-md mx-auto">
+            <span id="snackbar-message"></span>
+            <button onclick="hideSnackbar()" class="btn btn-sm btn-ghost">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/htmx.org@1.9.6"></script>
+    <script>
+        // Snackbar functions
+        function showSnackbar(message, type = 'info') {
+            const snackbar = document.getElementById('snackbar');
+            const messageEl = document.getElementById('snackbar-message');
+            const alert = snackbar.querySelector('.alert');
+            
+            // Set message and type
+            messageEl.textContent = message;
+            alert.className = `alert shadow-lg max-w-md mx-auto alert-${type}`;
+            
+            // Show snackbar
+            snackbar.classList.add('show');
+            
+            // Auto hide after 5 seconds
+            setTimeout(() => {
+                hideSnackbar();
+            }, 5000);
+        }
+
+        function hideSnackbar() {
+            const snackbar = document.getElementById('snackbar');
+            snackbar.classList.remove('show');
+        }
+
+        // Auto-dismiss alerts after 5 seconds
+        setTimeout(() => {
+            const alerts = document.querySelectorAll('.alert:not(#snackbar .alert)');
+            alerts.forEach(alert => {
+                alert.style.display = 'none';
+            });
+        }, 5000);
+
+        // Flash messages handling
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    showSnackbar('{{ message }}', '{{ category if category != "message" else "info" }}');
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </script>
+</body>
+</html>

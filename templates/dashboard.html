@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - ZFS iSCSI Manager{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold">Dashboard</h1>
+    <p class="text-gray-600">Overview of your ZFS storage and iSCSI targets</p>
+</div>
+
+<!-- System Status -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+    <!-- iSCSI Status -->
+    <div class="stat bg-base-200 shadow-lg">
+        <div class="stat-figure text-primary">
+            <i class="fas fa-target text-3xl"></i>
+        </div>
+        <div class="stat-title">iSCSI Service</div>
+        <div class="stat-value">
+            <span class="service-status {{ 'status-running' if iscsi_status.targetclid == 'running' else 'status-stopped' }}">
+                {{ iscsi_status.targetclid }}
+            </span>
+        </div>
+        <div class="stat-desc">TargetCLI Daemon</div>
+    </div>
+
+    <!-- ZFS Status -->
+    <div class="stat bg-base-200 shadow-lg">
+        <div class="stat-figure text-secondary">
+            <i class="fas fa-database text-3xl"></i>
+        </div>
+        <div class="stat-title">ZFS Pools</div>
+        <div class="stat-value">{{ zfs_pools|length }}</div>
+        <div class="stat-desc">Active storage pools</div>
+    </div>
+
+    <!-- Total Targets -->
+    <div class="stat bg-base-200 shadow-lg">
+        <div class="stat-figure text-accent">
+            <i class="fas fa-bullseye text-3xl"></i>
+        </div>
+        <div class="stat-title">iSCSI Targets</div>
+        <div class="stat-value" id="targets-count">-</div>
+        <div class="stat-desc">Active targets</div>
+    </div>
+
+    <!-- Total Volumes -->
+    <div class="stat bg-base-200 shadow-lg">
+        <div class="stat-figure text-info">
+            <i class="fas fa-hdd text-3xl"></i>
+        </div>
+        <div class="stat-title">ZFS Volumes</div>
+        <div class="stat-value" id="volumes-count">-</div>
+        <div class="stat-desc">Block devices</div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="card bg-base-200 shadow-xl mb-8">
+    <div class="card-body">
+        <h2 class="card-title"><i class="fas fa-bolt"></i> Quick Actions</h2>
+        <div class="flex flex-wrap gap-4">
+            <a href="{{ url_for('targets') }}" class="btn btn-primary">
+                <i class="fas fa-plus"></i> Create Target
+            </a>
+            <a href="{{ url_for('zfs_management') }}" class="btn btn-secondary">
+                <i class="fas fa-hdd"></i> Create Volume
+            </a>
+            <a href="{{ url_for('snapshots') }}" class="btn btn-accent">
+                <i class="fas fa-camera"></i> Take Snapshot
+            </a>
+            <button class="btn btn-info" onclick="refreshStatus()">
+                <i class="fas fa-sync-alt"></i> Refresh Status
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ZFS Pool Status -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+    <!-- ZFS Pools -->
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title"><i class="fas fa-database"></i> ZFS Pools</h2>
+            <div class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Size</th>
+                            <th>Used</th>
+                            <th>Health</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for pool in zfs_pools %}
+                        <tr>
+                            <td class="font-bold">{{ pool.name }}</td>
+                            <td>{{ pool.size }}</td>
+                            <td>{{ pool.allocated }}</td>
+                            <td>
+                                <span class="badge {{ 'badge-success' if pool.health == 'ONLINE' else 'badge-error' }}">
+                                    {{ pool.health }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title"><i class="fas fa-history"></i> System Information</h2>
+            <div class="space-y-4">
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle"></i>
+                    <span>ZFS Compression: {{ zfs_status.output[:100] if zfs_status.output else 'N/A' }}...</span>
+                </div>
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle"></i>
+                    <span>iSCSI Initiator: Ready for client connections</span>
+                </div>
+                <div class="alert alert-warning">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span>Ensure regular snapshots for data protection</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Load dynamic data
+    async function loadDashboardData() {
+        try {
+            const response = await fetch('/api/targets');
+            const targets = await response.json();
+            document.getElementById('targets-count').textContent = targets.length;
+
+            const zfsResponse = await fetch('/api/zfs/datasets');
+            const datasets = await zfsResponse.json();
+            const volumes = datasets.filter(d => d.type === 'volume');
+            document.getElementById('volumes-count').textContent = volumes.length;
+        } catch (error) {
+            console.error('Error loading dashboard data:', error);
+        }
+    }
+
+    function refreshStatus() {
+        loadDashboardData();
+        // Show refresh indicator
+        const btn = event.target;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
+        btn.disabled = true;
+        
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }, 2000);
+    }
+
+    // Load initial data
+    document.addEventListener('DOMContentLoaded', loadDashboardData);
+</script>
+{% endblock %}

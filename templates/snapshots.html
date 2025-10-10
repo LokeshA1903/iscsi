@@ -1,0 +1,758 @@
+{% extends "base.html" %}
+
+{% block title %}ZFS Snapshots - ZFS iSCSI Manager{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <div class="flex items-center gap-4">
+        <div class="p-3 bg-primary/10 rounded-2xl">
+            <i class="fas fa-camera text-3xl text-primary"></i>
+        </div>
+        <div>
+            <h1 class="text-3xl font-bold">ZFS Snapshots</h1>
+            <p class="text-gray-600">Manage snapshots, rollbacks, clones, and scheduled backups</p>
+        </div>
+    </div>
+</div>
+
+<!-- Create Snapshot Modal -->
+<dialog id="createSnapshotModal" class="modal">
+    <div class="modal-box">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="p-2 bg-primary/10 rounded-lg">
+                <i class="fas fa-camera text-primary"></i>
+            </div>
+            <h3 class="font-bold text-lg">Create ZFS Snapshot</h3>
+        </div>
+        <form id="createSnapshotForm" class="space-y-4">
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-semibold">Dataset/Volume</span>
+                </label>
+                <select id="snapshotDataset" name="dataset" class="select select-bordered w-full" required>
+                    <option value="" disabled selected>Select dataset or volume</option>
+                    {% for dataset in datasets %}
+                    <option value="{{ dataset.name }}">{{ dataset.name }} ({{ dataset.type }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-semibold">Snapshot Name</span>
+                </label>
+                <input type="text" id="snapshotName" name="snapshot_name" placeholder="e.g., backup-2025-10-03" class="input input-bordered w-full" required pattern="[a-zA-Z0-9\-_]+" title="Alphanumeric characters, hyphens, and underscores only">
+                <label class="label">
+                    <span class="label-text-alt">Use alphanumeric characters, hyphens, and underscores only</span>
+                </label>
+            </div>
+
+            <div class="modal-action">
+                <button type="button" onclick="document.getElementById('createSnapshotModal').close()" class="btn btn-ghost">
+                    Cancel
+                </button>
+                <button type="submit" class="btn btn-primary gap-2">
+                    <i class="fas fa-camera"></i>
+                    Create Snapshot
+                </button>
+            </div>
+        </form>
+    </div>
+</dialog>
+
+<!-- Create Schedule Modal -->
+<dialog id="createScheduleModal" class="modal">
+    <div class="modal-box max-w-2xl">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="p-2 bg-secondary/10 rounded-lg">
+                <i class="fas fa-calendar-plus text-secondary"></i>
+            </div>
+            <h3 class="font-bold text-lg">Create Scheduled Backup</h3>
+        </div>
+        <form id="createScheduleForm" class="space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">Schedule Name</span>
+                    </label>
+                    <input type="text" id="scheduleName" name="schedule_name" placeholder="e.g., daily-backup" class="input input-bordered w-full" required>
+                </div>
+
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">Dataset/Volume</span>
+                    </label>
+                    <select id="scheduleDataset" name="dataset" class="select select-bordered w-full" required>
+                        <option value="" disabled selected>Select dataset or volume</option>
+                        {% for dataset in datasets %}
+                        <option value="{{ dataset.name }}">{{ dataset.name }} ({{ dataset.type }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">Schedule Type</span>
+                    </label>
+                    <select id="scheduleType" name="schedule_type" class="select select-bordered w-full" required onchange="toggleScheduleFields()">
+                        <option value="hourly">Hourly</option>
+                        <option value="daily" selected>Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="custom">Custom Cron</option>
+                    </select>
+                </div>
+
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">Retention Period</span>
+                    </label>
+                    <div class="join w-full">
+                        <input type="number" id="retentionDays" name="retention_days" placeholder="7" class="input input-bordered join-item w-full" min="1" value="7">
+                        <span class="join-item bg-base-300 px-4 flex items-center">days</span>
+                    </div>
+                    <label class="label">
+                        <span class="label-text-alt">Older snapshots will be automatically deleted</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Schedule Configuration -->
+            <div id="scheduleConfig" class="space-y-4 p-4 bg-base-200 rounded-lg">
+                <!-- Dynamic fields will be inserted here -->
+            </div>
+
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle"></i>
+                <span>Schedule will create snapshots automatically and clean up older ones based on retention period</span>
+            </div>
+
+            <div class="modal-action">
+                <button type="button" onclick="document.getElementById('createScheduleModal').close()" class="btn btn-ghost">
+                    Cancel
+                </button>
+                <button type="submit" class="btn btn-secondary gap-2">
+                    <i class="fas fa-calendar-plus"></i>
+                    Create Schedule
+                </button>
+            </div>
+        </form>
+    </div>
+</dialog>
+
+<!-- Clone Snapshot Modal -->
+<dialog id="cloneSnapshotModal" class="modal">
+    <div class="modal-box">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="p-2 bg-info/10 rounded-lg">
+                <i class="fas fa-copy text-info"></i>
+            </div>
+            <h3 class="font-bold text-lg">Clone Snapshot</h3>
+        </div>
+        <form id="cloneSnapshotForm" class="space-y-4">
+            <input type="hidden" id="cloneSnapshotName" name="snapshot_name">
+            
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-semibold">New Dataset Name</span>
+                </label>
+                <input type="text" id="cloneName" name="clone_name" placeholder="e.g., my-cloned-dataset" class="input input-bordered w-full" required pattern="[a-zA-Z0-9\-_\/]+" title="Alphanumeric characters, hyphens, underscores, and forward slashes allowed">
+                <label class="label">
+                    <span class="label-text-alt">Enter the full path for the new dataset (e.g., tank/my-clone)</span>
+                </label>
+            </div>
+
+            <div class="modal-action">
+                <button type="button" onclick="document.getElementById('cloneSnapshotModal').close()" class="btn btn-ghost">
+                    Cancel
+                </button>
+                <button type="submit" class="btn btn-info gap-2">
+                    <i class="fas fa-copy"></i>
+                    Create Clone
+                </button>
+            </div>
+        </form>
+    </div>
+</dialog>
+
+<!-- Quick Actions -->
+<div class="material-card bg-base-100 p-6 mb-8">
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div>
+            <h2 class="text-xl font-semibold mb-2">Quick Actions</h2>
+            <p class="text-gray-600">Manage your ZFS snapshots and automated backups</p>
+        </div>
+        <div class="flex flex-wrap gap-3">
+            <button class="btn btn-primary gap-2" onclick="document.getElementById('createSnapshotModal').showModal()">
+                <i class="fas fa-camera"></i>
+                Create Snapshot
+            </button>
+            <button class="btn btn-secondary gap-2" onclick="document.getElementById('createScheduleModal').showModal()">
+                <i class="fas fa-calendar-plus"></i>
+                Schedule Backup
+            </button>
+            <button class="btn btn-outline gap-2" onclick="refreshSnapshots()">
+                <i class="fas fa-sync-alt"></i>
+                Refresh
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
+    <!-- Manual Snapshots -->
+    <div class="material-card bg-base-100">
+        <div class="card-body">
+            <div class="flex items-center gap-3 mb-6">
+                <div class="p-2 bg-primary/10 rounded-lg">
+                    <i class="fas fa-camera text-primary"></i>
+                </div>
+                <h2 class="card-title text-xl">ZFS Snapshots</h2>
+                <div class="badge badge-primary badge-lg">{{ snapshots|length }}</div>
+            </div>
+            
+            {% if snapshots %}
+            <div class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Snapshot Name</th>
+                            <th>Creation Time</th>
+                            <th>Size</th>
+                            <th class="text-center">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for snapshot in snapshots %}
+                        <tr>
+                            <td>
+                                <div class="flex items-center gap-2">
+                                    <i class="fas fa-camera text-gray-400"></i>
+                                    <span class="font-mono text-sm">{{ snapshot.name }}</span>
+                                </div>
+                            </td>
+                            <td>{{ snapshot.creation }}</td>
+                            <td>
+                                <div class="tooltip" data-tip="Used: {{ snapshot.used }} | Referenced: {{ snapshot.referenced }}">
+                                    <span class="badge badge-outline">{{ snapshot.used }}</span>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="flex justify-center gap-1">
+                                    <button class="btn btn-warning btn-xs gap-1" onclick="rollbackSnapshot('{{ snapshot.name }}')">
+                                        <i class="fas fa-undo"></i>
+                                        Rollback
+                                    </button>
+                                    <button class="btn btn-info btn-xs gap-1" onclick="showCloneModal('{{ snapshot.name }}')">
+                                        <i class="fas fa-copy"></i>
+                                        Clone
+                                    </button>
+                                    <button class="btn btn-error btn-xs gap-1" onclick="deleteSnapshot('{{ snapshot.name }}')">
+                                        <i class="fas fa-trash"></i>
+                                        Delete
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-12">
+                <div class="p-4 bg-base-200 rounded-2xl inline-block mb-4">
+                    <i class="fas fa-camera text-4xl text-gray-400"></i>
+                </div>
+                <h3 class="text-xl font-semibold mb-2">No Snapshots Found</h3>
+                <p class="text-gray-600 mb-6">Create your first snapshot to get started with data protection</p>
+                <button class="btn btn-primary gap-2" onclick="document.getElementById('createSnapshotModal').showModal()">
+                    <i class="fas fa-camera"></i>
+                    Create Snapshot
+                </button>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Scheduled Backups -->
+    <div class="material-card bg-base-100">
+        <div class="card-body">
+            <div class="flex items-center gap-3 mb-6">
+                <div class="p-2 bg-secondary/10 rounded-lg">
+                    <i class="fas fa-calendar-alt text-secondary"></i>
+                </div>
+                <h2 class="card-title text-xl">Scheduled Backups</h2>
+            </div>
+            
+            <div id="schedulesContainer">
+                <div id="noSchedulesMessage" class="text-center py-12">
+                    <div class="p-4 bg-base-200 rounded-2xl inline-block mb-4">
+                        <i class="fas fa-calendar-times text-4xl text-gray-400"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">No Scheduled Backups</h3>
+                    <p class="text-gray-600 mb-6">Create your first scheduled backup for automated data protection</p>
+                    <button class="btn btn-secondary gap-2" onclick="document.getElementById('createScheduleModal').showModal()">
+                        <i class="fas fa-calendar-plus"></i>
+                        Schedule Backup
+                    </button>
+                </div>
+
+                <div id="schedulesList" class="space-y-4"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Floating Action Button -->
+<button class="floating-action-btn btn btn-primary btn-circle btn-lg shadow-2xl" onclick="document.getElementById('createSnapshotModal').showModal()">
+    <i class="fas fa-plus text-xl"></i>
+</button>
+
+<script>
+// Initialize schedule fields on page load
+document.addEventListener('DOMContentLoaded', function() {
+    toggleScheduleFields();
+    loadSchedules();
+});
+
+// Schedule configuration templates
+const scheduleTemplates = {
+    hourly: `
+        <div class="form-control">
+            <label class="label">
+                <span class="label-text font-semibold">Minute</span>
+            </label>
+            <select name="minute" class="select select-bordered w-full">
+                <option value="0">0 (Start of hour)</option>
+                <option value="30">30 (Half hour)</option>
+            </select>
+        </div>
+    `,
+    daily: `
+        <div class="form-control">
+            <label class="label">
+                <span class="label-text font-semibold">Time</span>
+            </label>
+            <input type="time" name="time" value="02:00" class="input input-bordered w-full">
+        </div>
+    `,
+    weekly: `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-semibold">Day of Week</span>
+                </label>
+                <select name="day_of_week" class="select select-bordered w-full">
+                    <option value="0">Sunday</option>
+                    <option value="1">Monday</option>
+                    <option value="2">Tuesday</option>
+                    <option value="3">Wednesday</option>
+                    <option value="4">Thursday</option>
+                    <option value="5">Friday</option>
+                    <option value="6">Saturday</option>
+                </select>
+            </div>
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-semibold">Time</span>
+                </label>
+                <input type="time" name="time" value="02:00" class="input input-bordered w-full">
+            </div>
+        </div>
+    `,
+    monthly: `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-semibold">Day of Month</span>
+                </label>
+                <input type="number" name="day_of_month" min="1" max="31" value="1" class="input input-bordered w-full">
+            </div>
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text font-semibold">Time</span>
+                </label>
+                <input type="time" name="time" value="02:00" class="input input-bordered w-full">
+            </div>
+        </div>
+    `,
+    custom: `
+        <div class="form-control">
+            <label class="label">
+                <span class="label-text font-semibold">Cron Expression</span>
+            </label>
+            <input type="text" name="cron_expression" placeholder="0 2 * * * (Every day at 2 AM)" class="input input-bordered w-full">
+            <label class="label">
+                <span class="label-text-alt">Format: minute hour day month weekday</span>
+            </label>
+        </div>
+    `
+};
+
+function toggleScheduleFields() {
+    const scheduleType = document.getElementById('scheduleType').value;
+    const configContainer = document.getElementById('scheduleConfig');
+    
+    configContainer.innerHTML = scheduleTemplates[scheduleType] || '';
+}
+
+async function loadSchedules() {
+    try {
+        const response = await fetch('/api/schedules');
+        const schedules = await response.json();
+
+        const noSchedules = document.getElementById('noSchedulesMessage');
+        const schedulesList = document.getElementById('schedulesList');
+
+        if (schedules.length === 0) {
+            noSchedules.classList.remove('hidden');
+            schedulesList.innerHTML = '';
+        } else {
+            noSchedules.classList.add('hidden');
+            renderSchedules(schedules);
+        }
+    } catch (error) {
+        console.error('Error loading schedules:', error);
+        showSnackbar('Error loading schedules: ' + error.message, 'error');
+    }
+}
+
+function renderSchedules(schedules) {
+    const schedulesList = document.getElementById('schedulesList');
+    
+    schedulesList.innerHTML = schedules.map(schedule => `
+        <div class="material-card bg-base-100 p-4">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                <div class="flex-1">
+                    <div class="flex items-center gap-3 mb-2">
+                        <i class="fas fa-calendar-check text-secondary"></i>
+                        <h3 class="font-semibold text-lg">${schedule.name}</h3>
+                        <div class="badge ${schedule.enabled ? 'badge-success' : 'badge-error'}">
+                            ${schedule.enabled ? 'Active' : 'Paused'}
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+                        <div>
+                            <span class="font-semibold">Dataset:</span>
+                            <span class="font-mono ml-2">${schedule.dataset}</span>
+                        </div>
+                        <div>
+                            <span class="font-semibold">Schedule:</span>
+                            <span class="ml-2 capitalize">${schedule.schedule_type}</span>
+                        </div>
+                        <div>
+                            <span class="font-semibold">Retention:</span>
+                            <span class="ml-2">${schedule.retention_days} days</span>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2 text-sm text-gray-600">
+                        <div>
+                            <span class="font-semibold">Last Run:</span>
+                            <span class="ml-2">${schedule.last_run || 'Never'}</span>
+                        </div>
+                        <div>
+                            <span class="font-semibold">Next Run:</span>
+                            <span class="ml-2">${schedule.next_run || 'N/A'}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="flex gap-2">
+                    <button class="btn btn-sm ${schedule.enabled ? 'btn-warning' : 'btn-success'}" onclick="toggleSchedule('${schedule.id}', ${!schedule.enabled})">
+                        <i class="fas fa-${schedule.enabled ? 'pause' : 'play'}"></i>
+                        ${schedule.enabled ? 'Pause' : 'Resume'}
+                    </button>
+                    <button class="btn btn-sm btn-error" onclick="deleteSchedule('${schedule.id}')">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Form handlers
+document.getElementById('createSnapshotForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const data = {
+        dataset: formData.get('dataset'),
+        snapshot_name: formData.get('snapshot_name')
+    };
+
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
+    submitBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/zfs/snapshot/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showSnackbar('Snapshot created successfully', 'success');
+            document.getElementById('createSnapshotModal').close();
+            this.reset();
+            setTimeout(() => window.location.reload(), 1000);
+        } else {
+            showSnackbar('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showSnackbar('Error creating snapshot: ' + error.message, 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+});
+
+document.getElementById('createScheduleForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const scheduleType = formData.get('schedule_type');
+    
+    let cronExpression = '';
+    if (scheduleType === 'custom') {
+        cronExpression = formData.get('cron_expression');
+    } else {
+        // Generate cron expression based on schedule type
+        const time = formData.get('time') || '02:00';
+        const [hours, minutes] = time.split(':');
+        
+        switch(scheduleType) {
+            case 'hourly':
+                const minute = formData.get('minute') || '0';
+                cronExpression = `${minute} * * * *`;
+                break;
+            case 'daily':
+                cronExpression = `${minutes} ${hours} * * *`;
+                break;
+            case 'weekly':
+                const dayOfWeek = formData.get('day_of_week') || '0';
+                cronExpression = `${minutes} ${hours} * * ${dayOfWeek}`;
+                break;
+            case 'monthly':
+                const dayOfMonth = formData.get('day_of_month') || '1';
+                cronExpression = `${minutes} ${hours} ${dayOfMonth} * *`;
+                break;
+        }
+    }
+
+    const data = {
+        name: formData.get('schedule_name'),
+        dataset: formData.get('dataset'),
+        schedule_type: scheduleType,
+        cron_expression: cronExpression,
+        retention_days: parseInt(formData.get('retention_days')) || 7
+    };
+
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
+    submitBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/schedules/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showSnackbar('Schedule created successfully', 'success');
+            document.getElementById('createScheduleModal').close();
+            this.reset();
+            loadSchedules();
+        } else {
+            showSnackbar('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showSnackbar('Error creating schedule: ' + error.message, 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+});
+
+document.getElementById('cloneSnapshotForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const data = {
+        snapshot_name: formData.get('snapshot_name'),
+        clone_name: formData.get('clone_name')
+    };
+
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Cloning...';
+    submitBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/zfs/snapshot/clone', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showSnackbar('Clone created successfully', 'success');
+            document.getElementById('cloneSnapshotModal').close();
+            this.reset();
+            setTimeout(() => window.location.reload(), 1000);
+        } else {
+            showSnackbar('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showSnackbar('Error creating clone: ' + error.message, 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+});
+
+// Action functions
+function showCloneModal(snapshotName) {
+    document.getElementById('cloneSnapshotName').value = snapshotName;
+    
+    // Suggest a clone name based on the snapshot
+    const baseName = snapshotName.split('@')[0];
+    const timestamp = new Date().toISOString().slice(0,10).replace(/-/g, '');
+    const suggestedName = `${baseName}-clone-${timestamp}`;
+    document.getElementById('cloneName').value = suggestedName;
+    
+    document.getElementById('cloneSnapshotModal').showModal();
+}
+
+async function rollbackSnapshot(snapshotName) {
+    if (!confirm(`Are you sure you want to rollback to:\n${snapshotName}?\n\nThis will revert all changes since this snapshot was taken!`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/zfs/snapshot/rollback', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ snapshot_name: snapshotName })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showSnackbar('Rollback completed successfully', 'success');
+            setTimeout(() => window.location.reload(), 1000);
+        } else {
+            showSnackbar('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showSnackbar('Error performing rollback: ' + error.message, 'error');
+    }
+}
+
+async function deleteSnapshot(snapshotName) {
+    if (!confirm(`Are you sure you want to delete:\n${snapshotName}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/zfs/snapshot/delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ snapshot_name: snapshotName })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showSnackbar('Snapshot deleted successfully', 'success');
+            setTimeout(() => window.location.reload(), 1000);
+        } else {
+            showSnackbar('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showSnackbar('Error deleting snapshot: ' + error.message, 'error');
+    }
+}
+
+async function toggleSchedule(scheduleId, enabled) {
+    try {
+        const response = await fetch('/api/schedules/toggle', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+                schedule_id: scheduleId,
+                enabled: enabled
+            })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showSnackbar(`Schedule ${enabled ? 'enabled' : 'paused'} successfully`, 'success');
+            loadSchedules();
+        } else {
+            showSnackbar('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showSnackbar('Error updating schedule: ' + error.message, 'error');
+    }
+}
+
+async function deleteSchedule(scheduleId) {
+    if (!confirm('Are you sure you want to delete this schedule?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/schedules/delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ schedule_id: scheduleId })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showSnackbar('Schedule deleted successfully', 'success');
+            loadSchedules();
+        } else {
+            showSnackbar('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showSnackbar('Error deleting schedule: ' + error.message, 'error');
+    }
+}
+
+function refreshSnapshots() {
+    window.location.reload();
+}
+</script>
+{% endblock %}

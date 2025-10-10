@@ -1,0 +1,563 @@
+{% extends "base.html" %}
+
+{% block title %}ZFS Storage - ZFS iSCSI Manager{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold">ZFS Storage Management</h1>
+    <p class="text-gray-600">Manage ZFS pools, datasets, and volumes for iSCSI targets</p>
+</div>
+
+<!-- Create Volume Modal -->
+<dialog id="createVolumeModal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Create ZFS Volume</h3>
+        <form id="createVolumeForm" class="py-4">
+            <div class="form-control w-full">
+                <label class="label">
+                    <span class="label-text">Volume Name</span>
+                </label>
+                <input type="text" id="volumeName" name="name" placeholder="e.g., iscsi-volume" class="input input-bordered w-full" required pattern="[a-zA-Z0-9\-_]+" title="Alphanumeric characters, hyphens, and underscores only">
+                <div class="text-sm text-gray-500 mt-1">Volume name will be used for iSCSI target creation</div>
+            </div>
+            
+            <div class="form-control w-full mt-4">
+                <label class="label">
+                    <span class="label-text">Size</span>
+                </label>
+                <div class="join">
+                    <input type="number" id="volumeSize" name="size" placeholder="10" class="input input-bordered join-item w-32" required min="1">
+                    <select class="select select-bordered join-item" name="size_unit">
+                        <option value="M">MB</option>
+                        <option value="G" selected>GB</option>
+                        <option value="T">TB</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-control w-full mt-4">
+                <label class="label">
+                    <span class="label-text">Pool</span>
+                </label>
+                <select id="volumePool" name="pool" class="select select-bordered w-full" required>
+                    {% for pool in pools %}
+                    <option value="{{ pool.name }}">{{ pool.name }} ({{ pool.free }} free)</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="modal-action">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Create Volume
+                </button>
+                <button type="button" onclick="document.getElementById('createVolumeModal').close()" class="btn">
+                    Cancel
+                </button>
+            </div>
+        </form>
+    </div>
+</dialog>
+
+<!-- Resize Volume Modal -->
+<dialog id="resizeVolumeModal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Resize ZFS Volume</h3>
+        <form id="resizeVolumeForm" class="py-4">
+            <input type="hidden" id="resizeVolumeName" name="name">
+            <input type="hidden" id="resizeVolumePool" name="pool">
+            
+            <div class="form-control w-full">
+                <label class="label">
+                    <span class="label-text">Current Size</span>
+                </label>
+                <input type="text" id="currentSize" class="input input-bordered w-full" disabled>
+            </div>
+            
+            <div class="form-control w-full mt-4">
+                <label class="label">
+                    <span class="label-text">New Size</span>
+                </label>
+                <div class="join">
+                    <input type="number" id="newVolumeSize" name="new_size" class="input input-bordered join-item w-32" required min="1">
+                    <select class="select select-bordered join-item" name="new_size_unit">
+                        <option value="M">MB</option>
+                        <option value="G" selected>GB</option>
+                        <option value="T">TB</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="alert alert-warning mt-4">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span>You can only increase the size of ZFS volumes, not decrease them.</span>
+            </div>
+
+            <div class="modal-action">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-expand"></i> Resize Volume
+                </button>
+                <button type="button" onclick="document.getElementById('resizeVolumeModal').close()" class="btn">
+                    Cancel
+                </button>
+            </div>
+        </form>
+    </div>
+</dialog>
+
+<!-- Volume Details Modal -->
+<dialog id="volumeDetailsModal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Volume Details</h3>
+        <div class="py-4">
+            <div class="space-y-3" id="volumeDetailsContent">
+                <!-- Details will be loaded here -->
+            </div>
+        </div>
+        <div class="modal-action">
+            <button type="button" onclick="document.getElementById('volumeDetailsModal').close()" class="btn">
+                Close
+            </button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Quick Actions -->
+<div class="card bg-base-200 shadow-xl mb-8">
+    <div class="card-body">
+        <h2 class="card-title"><i class="fas fa-bolt"></i> Quick Actions</h2>
+        <div class="flex flex-wrap gap-4">
+            <button class="btn btn-primary" onclick="document.getElementById('createVolumeModal').showModal()">
+                <i class="fas fa-plus"></i> Create Volume
+            </button>
+            <button class="btn btn-secondary" onclick="refreshZfsData()">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
+            <a href="{{ url_for('targets') }}" class="btn btn-accent">
+                <i class="fas fa-target"></i> Create iSCSI Target
+            </a>
+            <a href="{{ url_for('snapshots') }}" class="btn btn-info">
+                <i class="fas fa-camera"></i> Manage Snapshots
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+    <!-- ZFS Pools -->
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title"><i class="fas fa-database"></i> ZFS Pools</h2>
+            
+            {% if pools %}
+            <div class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Size</th>
+                            <th>Used</th>
+                            <th>Free</th>
+                            <th>Health</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for pool in pools %}
+                        <tr>
+                            <td class="font-bold">{{ pool.name }}</td>
+                            <td>{{ pool.size }}</td>
+                            <td>{{ pool.allocated }}</td>
+                            <td>{{ pool.free }}</td>
+                            <td>
+                                <span class="badge {{ 'badge-success' if pool.health == 'ONLINE' else 'badge-error' }}">
+                                    {{ pool.health }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <i class="fas fa-database text-4xl text-gray-400 mb-4"></i>
+                <p class="text-gray-600">No ZFS pools found</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Compression Info -->
+    <div class="card bg-base-200 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title"><i class="fas fa-compress"></i> Compression</h2>
+            {% if compression_info %}
+            <div class="space-y-4">
+                <div class="stat">
+                    <div class="stat-title">Compression Algorithm</div>
+                    <div class="stat-value text-lg">{{ compression_info.compression or 'lz4' }}</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-title">Compression Ratio</div>
+                    <div class="stat-value text-lg">{{ compression_info.compressratio or '1.00x' }}</div>
+                </div>
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <i class="fas fa-chart-bar text-4xl text-gray-400 mb-4"></i>
+                <p class="text-gray-600">No compression data available</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- ZFS Datasets and Volumes -->
+<div class="card bg-base-200 shadow-xl mt-8">
+    <div class="card-body">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="card-title"><i class="fas fa-hdd"></i> Datasets & Volumes</h2>
+            <div class="flex gap-2">
+                <button class="btn btn-sm btn-outline" onclick="toggleVolumeView()">
+                    <i class="fas fa-filter"></i> Show Only Volumes
+                </button>
+            </div>
+        </div>
+        
+        <div id="datasetsLoading" class="text-center py-8">
+            <span class="loading loading-spinner loading-lg"></span>
+            <p class="mt-4">Loading datasets...</p>
+        </div>
+
+        <div id="datasetsContainer" class="hidden">
+            {% if datasets %}
+            <div class="overflow-x-auto">
+                <table class="table table-zebra" id="datasetsTable">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Used</th>
+                            <th>Available</th>
+                            <th>Referenced</th>
+                            <th>Mountpoint</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for dataset in datasets %}
+                        <tr class="dataset-row" data-type="{{ dataset.type }}">
+                            <td class="font-mono">
+                                <div class="flex items-center gap-2">
+                                    {{ dataset.name }}
+                                    {% if dataset.type == 'volume' %}
+                                    <button class="btn btn-xs btn-ghost" onclick="showVolumeDetails('{{ dataset.name }}')" title="View Details">
+                                        <i class="fas fa-info-circle"></i>
+                                    </button>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td>
+                                <span class="badge {{ 'badge-primary' if dataset.type == 'volume' else 'badge-secondary' }}">
+                                    {{ dataset.type }}
+                                </span>
+                            </td>
+                            <td>{{ dataset.used }}</td>
+                            <td>{{ dataset.available }}</td>
+                            <td>{{ dataset.referenced }}</td>
+                            <td class="font-mono text-sm">{{ dataset.mountpoint }}</td>
+                            <td>
+                                {% if dataset.type == 'volume' %}
+                                <span class="badge badge-success" id="status-{{ dataset.name|replace('/', '-') }}">
+                                    Available
+                                </span>
+                                {% else %}
+                                <span class="badge badge-outline">N/A</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="flex gap-2">
+                                    {% if dataset.type == 'volume' %}
+                                    <button class="btn btn-xs btn-outline" onclick="showResizeVolumeModal('{{ dataset.name }}', '{{ dataset.used }}')">
+                                        <i class="fas fa-expand"></i> Resize
+                                    </button>
+                                    <button class="btn btn-xs btn-error" onclick="deleteVolume('{{ dataset.name }}')">
+                                        <i class="fas fa-trash"></i> Delete
+                                    </button>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <i class="fas fa-inbox text-4xl text-gray-400 mb-4"></i>
+                <h3 class="text-xl font-semibold">No Datasets Found</h3>
+                <p class="text-gray-600 mt-2">Create your first ZFS volume to get started with iSCSI</p>
+                <button class="btn btn-primary mt-4" onclick="document.getElementById('createVolumeModal').showModal()">
+                    <i class="fas fa-plus"></i> Create Volume
+                </button>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+let showOnlyVolumes = false;
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Hide loading spinner and show datasets
+    const loading = document.getElementById('datasetsLoading');
+    const container = document.getElementById('datasetsContainer');
+    
+    if (loading && container) {
+        loading.classList.add('hidden');
+        container.classList.remove('hidden');
+    }
+    
+    // Check volume status (which ones are used in iSCSI)
+    checkVolumeStatus();
+});
+
+async function checkVolumeStatus() {
+    try {
+        const response = await fetch('/api/targets');
+        const targets = await response.json();
+        
+        // Get all configured volumes from iSCSI targets
+        const configuredVolumes = new Set();
+        targets.forEach(target => {
+            target.luns.forEach(lun => {
+                if (lun.backstore && lun.backstore !== 'unknown') {
+                    configuredVolumes.add(lun.backstore);
+                }
+            });
+        });
+        
+        // Update status badges
+        configuredVolumes.forEach(volumeName => {
+            const statusElement = document.getElementById(`status-${volumeName.replace(/\//g, '-')}`);
+            if (statusElement) {
+                statusElement.className = 'badge badge-warning';
+                statusElement.textContent = 'Used in iSCSI';
+            }
+        });
+    } catch (error) {
+        console.error('Error checking volume status:', error);
+    }
+}
+
+async function showVolumeDetails(volumeName) {
+    try {
+        // For now, show basic details. You can expand this to show more information
+        const detailsContent = `
+            <div class="space-y-2">
+                <div class="flex justify-between">
+                    <span class="font-semibold">Volume Name:</span>
+                    <span class="font-mono">${volumeName}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="font-semibold">Device Path:</span>
+                    <span class="font-mono">/dev/zvol/${volumeName}</span>
+                </div>
+                <div class="mt-4">
+                    <span class="font-semibold">Usage:</span>
+                    <div class="text-sm text-gray-500">This volume can be used for iSCSI targets</div>
+                </div>
+            </div>
+        `;
+        
+        document.getElementById('volumeDetailsContent').innerHTML = detailsContent;
+        document.getElementById('volumeDetailsModal').showModal();
+    } catch (error) {
+        console.error('Error loading volume details:', error);
+        showNotification('Error loading volume details', 'error');
+    }
+}
+
+function toggleVolumeView() {
+    showOnlyVolumes = !showOnlyVolumes;
+    const button = event.target;
+    const rows = document.querySelectorAll('.dataset-row');
+    
+    rows.forEach(row => {
+        if (showOnlyVolumes) {
+            if (row.getAttribute('data-type') === 'volume') {
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
+            button.innerHTML = '<i class="fas fa-list"></i> Show All';
+        } else {
+            row.style.display = '';
+            button.innerHTML = '<i class="fas fa-filter"></i> Show Only Volumes';
+        }
+    });
+}
+
+// Create Volume Form
+document.getElementById('createVolumeForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const size = formData.get('size') + formData.get('size_unit');
+    const data = {
+        name: formData.get('name'),
+        size: size,
+        pool: formData.get('pool') || 'tank'
+    };
+
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
+    submitBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/zfs/zvol/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('Volume created successfully', 'success');
+            document.getElementById('createVolumeModal').close();
+            this.reset();
+            setTimeout(() => window.location.reload(), 1000);
+        } else {
+            showNotification('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showNotification('Error creating volume: ' + error.message, 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+});
+
+// Resize Volume Form
+document.getElementById('resizeVolumeForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const newSize = formData.get('new_size') + formData.get('new_size_unit');
+    const data = {
+        name: formData.get('name'),
+        new_size: newSize,
+        pool: formData.get('pool') || 'tank'
+    };
+
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Resizing...';
+    submitBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/zfs/zvol/resize', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('Volume resized successfully', 'success');
+            document.getElementById('resizeVolumeModal').close();
+            this.reset();
+            setTimeout(() => window.location.reload(), 1000);
+        } else {
+            showNotification('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showNotification('Error resizing volume: ' + error.message, 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+});
+
+function showResizeVolumeModal(volumeName, currentSize) {
+    const parts = volumeName.split('/');
+    const name = parts[parts.length - 1];
+    const pool = parts[0];
+    
+    document.getElementById('resizeVolumeName').value = name;
+    document.getElementById('resizeVolumePool').value = pool;
+    document.getElementById('currentSize').value = currentSize;
+    document.getElementById('resizeVolumeModal').showModal();
+}
+
+async function deleteVolume(volumeName) {
+    const parts = volumeName.split('/');
+    const name = parts[parts.length - 1];
+    const pool = parts[0];
+    
+    if (!confirm(`Are you sure you want to delete volume:\n${volumeName}?\n\nThis will break any iSCSI targets using this volume!`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/zfs/zvol/delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+                name: name,
+                pool: pool
+            })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('Volume deleted successfully', 'success');
+            setTimeout(() => window.location.reload(), 1000);
+        } else {
+            showNotification('Error: ' + result.message, 'error');
+        }
+    } catch (error) {
+        showNotification('Error deleting volume: ' + error.message, 'error');
+    }
+}
+
+function refreshZfsData() {
+    const btn = event.target;
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
+    btn.disabled = true;
+    
+    setTimeout(() => {
+        window.location.reload();
+    }, 1000);
+}
+
+function showNotification(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `alert alert-${type} shadow-lg mb-4`;
+    toast.innerHTML = `
+        <div>
+            <i class="fas fa-${type === 'success' ? 'check' : type === 'error' ? 'exclamation-triangle' : 'info'}"></i>
+            <span>${message}</span>
+        </div>
+    `;
+    
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.remove();
+    }, 5000);
+}
+</script>
+{% endblock %}

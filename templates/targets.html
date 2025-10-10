@@ -1,0 +1,508 @@
+{% extends "base.html" %}
+
+{% block title %}iSCSI Targets - ZFS iSCSI Manager{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold">iSCSI Targets</h1>
+    <p class="text-gray-600">Manage iSCSI targets and LUNs</p>
+</div>
+
+<!-- Create Target Modal -->
+<dialog id="createTargetModal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Create New iSCSI Target</h3>
+        <form id="createTargetForm" class="py-4">
+            <!-- Pool Name First -->
+            <div class="form-control w-full">
+                <label class="label">
+                    <span class="label-text">Pool Name</span>
+                </label>
+                <select id="poolSelect" name="pool_name" class="select select-bordered w-full" required onchange="updateAvailableZvols()">
+                    <option value="" disabled selected>Select a pool</option>
+                    {% for pool in zfs_pools %}
+                    <option value="{{ pool.name }}">{{ pool.name }} ({{ pool.free }} free)</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <!-- ZFS Volume Second -->
+            <div class="form-control w-full mt-4">
+                <label class="label">
+                    <span class="label-text">ZFS Volume</span>
+                </label>
+                <select id="zvolSelect" name="zvol_name" class="select select-bordered w-full" required disabled>
+                    <option value="" disabled selected>Select pool first</option>
+                </select>
+                <div class="text-sm text-gray-500 mt-1">Only shows available volumes not configured in iSCSI</div>
+            </div>
+
+            <!-- Target Name with IQN Prefix -->
+            <div class="form-control w-full mt-4">
+                <label class="label">
+                    <span class="label-text">Target Name</span>
+                </label>
+                <div class="flex items-center">
+                    <span class="bg-base-300 px-3 py-2 rounded-l-lg border border-r-0 border-base-300 font-mono text-sm">iqn.2025-09.local.ubuntu:</span>
+                    <input type="text" id="targetName" name="target_name" placeholder="enter-custom-name" class="input input-bordered w-full rounded-l-none" required pattern="[a-zA-Z0-9\-_]+" title="Alphanumeric characters, hyphens, and underscores only">
+                </div>
+                <div class="text-sm text-gray-500 mt-1">Custom name part after the IQN prefix</div>
+            </div>
+
+            <!-- Authentication -->
+            <div class="form-control w-full mt-4">
+                <div class="flex items-center gap-3 p-3 bg-base-300 rounded-lg">
+                    <input type="checkbox" id="enableAuth" name="enable_auth" class="checkbox">
+                    <div>
+                        <label class="label cursor-pointer p-0">
+                            <span class="label-text font-semibold">Enable Authentication</span>
+                        </label>
+                        <div class="text-sm text-gray-500">Authentication is disabled by default</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-action">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Create Target
+                </button>
+                <button type="button" onclick="document.getElementById('createTargetModal').close()" class="btn">
+                    Cancel
+                </button>
+            </div>
+        </form>
+    </div>
+</dialog>
+
+<!-- Add ACL Modal -->
+<dialog id="addAclModal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Add Client ACL</h3>
+        <form id="addAclForm" class="py-4">
+            <input type="hidden" id="aclTargetIqn" name="target_iqn">
+            
+            <div class="form-control w-full">
+                <label class="label">
+                    <span class="label-text">Client IQN</span>
+                </label>
+                <input type="text" id="clientIqn" name="client_iqn" placeholder="e.g., iqn.2025-09.com.client:desktop1" class="input input-bordered w-full" required>
+            </div>
+
+            <div class="modal-action">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-shield-alt"></i> Add ACL
+                </button>
+                <button type="button" onclick="document.getElementById('addAclModal').close()" class="btn">
+                    Cancel
+                </button>
+            </div>
+        </form>
+    </div>
+</dialog>
+
+<!-- Quick Actions -->
+<div class="card bg-base-200 shadow-xl mb-8">
+    <div class="card-body">
+        <h2 class="card-title"><i class="fas fa-bolt"></i> Quick Actions</h2>
+        <div class="flex flex-wrap gap-4">
+            <button class="btn btn-primary" onclick="document.getElementById('createTargetModal').showModal()">
+                <i class="fas fa-plus"></i> Create Target
+            </button>
+            <button class="btn btn-secondary" onclick="refreshTargets()">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
+            <a href="{{ url_for('zfs_management') }}" class="btn btn-accent">
+                <i class="fas fa-hdd"></i> Create Volume First
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Targets List -->
+<div class="card bg-base-200 shadow-xl">
+    <div class="card-body">
+        <h2 class="card-title"><i class="fas fa-target"></i> iSCSI Targets</h2>
+        
+        <div id="targetsLoading" class="text-center py-8">
+            <span class="loading loading-spinner loading-lg"></span>
+            <p class="mt-4">Loading targets...</p>
+        </div>
+
+        <div id="targetsContainer" class="hidden">
+            <div id="noTargetsMessage" class="text-center py-8 hidden">
+                <i class="fas fa-inbox text-4xl text-gray-400 mb-4"></i>
+                <h3 class="text-xl font-semibold">No iSCSI Targets</h3>
+                <p class="text-gray-600 mt-2">Create your first iSCSI target to get started</p>
+                <button class="btn btn-primary mt-4" onclick="document.getElementById('createTargetModal').showModal()">
+                    <i class="fas fa-plus"></i> Create Target
+                </button>
+            </div>
+
+            <div id="targetsList" class="space-y-6"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Load targets on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadTargets();
+});
+
+// Update available ZVOLs when pool selection changes
+async function updateAvailableZvols() {
+    const poolSelect = document.getElementById('poolSelect');
+    const zvolSelect = document.getElementById('zvolSelect');
+    const selectedPool = poolSelect.value;
+
+    if (!selectedPool) {
+        zvolSelect.innerHTML = '<option value="" disabled selected>Select pool first</option>';
+        zvolSelect.disabled = true;
+        return;
+    }
+
+    zvolSelect.innerHTML = '<option value="">Loading volumes...</option>';
+    zvolSelect.disabled = true;
+
+    try {
+        const response = await fetch(`/api/zfs/zvols/available?pool_name=${selectedPool}`);
+        const zvols = await response.json();
+
+        zvolSelect.innerHTML = '';
+        if (zvols.length === 0) {
+            zvolSelect.innerHTML = '<option value="" disabled>No available volumes in this pool</option>';
+        } else {
+            zvols.forEach(zvol => {
+                const option = document.createElement('option');
+                option.value = zvol.name.split('/').pop();
+                option.textContent = `${zvol.name} (${zvol.used})`;
+                zvolSelect.appendChild(option);
+            });
+        }
+        zvolSelect.disabled = false;
+    } catch (error) {
+        console.error('Error loading volumes:', error);
+        zvolSelect.innerHTML = '<option value="" disabled>Error loading volumes</option>';
+    }
+}
+
+async function loadTargets() {
+    const loading = document.getElementById('targetsLoading');
+    const container = document.getElementById('targetsContainer');
+    const noTargets = document.getElementById('noTargetsMessage');
+    const targetsList = document.getElementById('targetsList');
+
+    try {
+        const response = await fetch('/api/targets');
+        const targets = await response.json();
+
+        loading.classList.add('hidden');
+        container.classList.remove('hidden');
+
+        if (targets.length === 0) {
+            noTargets.classList.remove('hidden');
+            targetsList.innerHTML = '';
+            return;
+        }
+
+        noTargets.classList.add('hidden');
+        renderTargets(targets);
+    } catch (error) {
+        console.error('Error loading targets:', error);
+        loading.innerHTML = `
+            <div class="alert alert-error">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span>Error loading targets: ${error.message}</span>
+            </div>
+        `;
+    }
+}
+
+function renderTargets(targets) {
+    const targetsList = document.getElementById('targetsList');
+    
+    targetsList.innerHTML = targets.map(target => `
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h3 class="card-title text-lg">
+                            <i class="fas fa-bullseye text-primary"></i>
+                            ${target.iqn}
+                        </h3>
+                        <div class="flex flex-wrap gap-4 mt-2 text-sm">
+                            <div class="badge badge-outline">
+                                <i class="fas fa-layer-group"></i>
+                                ${target.tpg_groups.length} TPGs
+                            </div>
+                            <div class="badge badge-outline">
+                                <i class="fas fa-hdd"></i>
+                                ${target.luns.length} LUNs
+                            </div>
+                            <div class="badge badge-outline">
+                                <i class="fas fa-shield-alt"></i>
+                                ${target.acls.length} ACLs
+                            </div>
+                            <div class="badge ${target.authentication ? 'badge-warning' : 'badge-success'}">
+                                <i class="fas fa-${target.authentication ? 'lock' : 'lock-open'}"></i>
+                                ${target.authentication ? 'Auth Enabled' : 'No Auth'}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button class="btn btn-sm btn-outline" onclick="showAddAclModal('${target.iqn}')">
+                            <i class="fas fa-shield-alt"></i> Add ACL
+                        </button>
+                        <button class="btn btn-sm btn-error" onclick="deleteTarget('${target.iqn}')">
+                            <i class="fas fa-trash"></i> Delete
+                        </button>
+                    </div>
+                </div>
+
+                <!-- LUNs -->
+                ${target.luns.length > 0 ? `
+                <div class="mt-4">
+                    <h4 class="font-semibold mb-2"><i class="fas fa-hdd"></i> LUNs</h4>
+                    <div class="overflow-x-auto">
+                        <table class="table table-sm table-zebra">
+                            <thead>
+                                <tr>
+                                    <th>LUN ID</th>
+                                    <th>Backstore</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${target.luns.map(lun => `
+                                    <tr>
+                                        <td class="font-mono">${lun.id}</td>
+                                        <td class="font-mono">${lun.backstore}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- ACLs -->
+                ${target.acls.length > 0 ? `
+                <div class="mt-4">
+                    <h4 class="font-semibold mb-2"><i class="fas fa-shield-alt"></i> Client ACLs</h4>
+                    <div class="space-y-2">
+                        ${target.acls.map(acl => `
+                            <div class="flex justify-between items-center bg-base-200 rounded-lg px-4 py-2">
+                                <span class="font-mono text-sm">${acl}</span>
+                                <button class="btn btn-xs btn-error" onclick="removeAcl('${target.iqn}', '${acl}')">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- Portals -->
+                ${target.portals.length > 0 ? `
+                <div class="mt-4">
+                    <h4 class="font-semibold mb-2"><i class="fas fa-network-wired"></i> Portals</h4>
+                    <div class="space-y-2">
+                        ${target.portals.map(portal => `
+                            <div class="bg-base-200 rounded-lg px-4 py-2">
+                                <span class="font-mono text-sm">${portal.ip}:${portal.port}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+function showAddAclModal(targetIqn) {
+    document.getElementById('aclTargetIqn').value = targetIqn;
+    document.getElementById('addAclModal').showModal();
+}
+
+async function deleteTarget(targetIqn) {
+    if (!confirm(`Are you sure you want to delete target:\n${targetIqn}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/targets/delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ target_iqn: targetIqn })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('Target deleted successfully', 'success');
+            loadTargets();
+        } else {
+            showNotification('Error: ' + result.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Error deleting target: ' + error.message, 'error');
+    }
+}
+
+async function removeAcl(targetIqn, clientIqn) {
+    if (!confirm(`Remove ACL for client:\n${clientIqn}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/targets/acl/remove', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+                target_iqn: targetIqn,
+                client_iqn: clientIqn
+            })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('ACL removed successfully', 'success');
+            loadTargets();
+        } else {
+            showNotification('Error: ' + result.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Error removing ACL: ' + error.message, 'error');
+    }
+}
+
+// Form handlers
+document.getElementById('createTargetForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const enableAuth = document.getElementById('enableAuth').checked;
+    
+    const data = {
+        name: formData.get('target_name'),
+        zvol_name: formData.get('zvol_name'),
+        pool_name: formData.get('pool_name') || 'tank',
+        enable_auth: enableAuth
+    };
+
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
+    submitBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/targets/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('Target created successfully', 'success');
+            document.getElementById('createTargetModal').close();
+            this.reset();
+            // Reset ZVOL select
+            document.getElementById('zvolSelect').innerHTML = '<option value="" disabled selected>Select pool first</option>';
+            document.getElementById('zvolSelect').disabled = true;
+            loadTargets();
+        } else {
+            showNotification('Error: ' + result.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Error creating target: ' + error.message, 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+});
+
+document.getElementById('addAclForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const data = {
+        target_iqn: formData.get('target_iqn'),
+        client_iqn: formData.get('client_iqn')
+    };
+
+    const submitBtn = this.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding...';
+    submitBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/targets/acl/add', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('ACL added successfully', 'success');
+            document.getElementById('addAclModal').close();
+            this.reset();
+            loadTargets();
+        } else {
+            showNotification('Error: ' + result.error, 'error');
+        }
+    } catch (error) {
+        showNotification('Error adding ACL: ' + error.message, 'error');
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
+});
+
+function refreshTargets() {
+    const btn = event.target;
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
+    btn.disabled = true;
+    
+    loadTargets();
+    
+    setTimeout(() => {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+    }, 1000);
+}
+
+function showNotification(message, type = 'info') {
+    // Create toast notification
+    const toast = document.createElement('div');
+    toast.className = `alert alert-${type} shadow-lg mb-4`;
+    toast.innerHTML = `
+        <div>
+            <i class="fas fa-${type === 'success' ? 'check' : type === 'error' ? 'exclamation-triangle' : 'info'}"></i>
+            <span>${message}</span>
+        </div>
+    `;
+    
+    // Add to page
+    document.body.appendChild(toast);
+    
+    // Remove after 5 seconds
+    setTimeout(() => {
+        toast.remove();
+    }, 5000);
+}
+</script>
+{% endblock %}
